@@ -9,12 +9,15 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal
 from datetime import date
 from db import get_db_conn
+
 from pages.clients import ClientsPage
 from pages.billing import BillingPage
 from pages.trucks import TrucksPage
 from pages.reports import ReportsPage
 from pages.settings import SettingsPage
 from pages.users import UsersPage
+from pages.audit_logs import AuditLogsPage   # ✅ NEW
+
 from audit import log_action
 
 
@@ -68,16 +71,19 @@ class DashboardWindow(QMainWindow):
         self.page_trucks = TrucksPage()
         self.page_reports = ReportsPage()
         self.page_users = UsersPage()
+        self.page_audit_logs = AuditLogsPage()     # ✅ NEW
         self.page_settings = SettingsPage()
 
+        # Add pages
         self.stack.addWidget(self.page_dashboard)
         self.stack.addWidget(self.page_clients)
         self.stack.addWidget(self.page_billing)
         self.stack.addWidget(self.page_trucks)
         self.stack.addWidget(self.page_reports)
-        self.stack.addWidget(self.page_users)
 
         if self.role == "admin":
+            self.stack.addWidget(self.page_users)
+            self.stack.addWidget(self.page_audit_logs)   # ✅ ADMIN ONLY
             self.stack.addWidget(self.page_settings)
 
         content_layout.addWidget(self.stack)
@@ -93,6 +99,7 @@ class DashboardWindow(QMainWindow):
 
         if self.role == "admin":
             self.add_btn(sidebar_layout, "Users", self.page_users)
+            self.add_btn(sidebar_layout, "Audit Logs", self.page_audit_logs)  # ✅ NEW
             self.add_btn(sidebar_layout, "Settings", self.page_settings)
 
         sidebar_layout.addStretch()
@@ -120,8 +127,15 @@ class DashboardWindow(QMainWindow):
         self.stack.setCurrentWidget(page)
         self.page_title.setText(f"Dashboard > {name}")
 
+        # Refresh behavior
         if hasattr(page, "refresh"):
             page.refresh()
+        if hasattr(page, "load_clients"):
+            page.load_clients()
+        if hasattr(page, "load_trucks"):
+            page.load_trucks()
+        if hasattr(page, "load_logs"):
+            page.load_logs()
 
         for k, b in self.sidebar_buttons.items():
             b.setStyleSheet(self.btn_style(k == name))
@@ -177,13 +191,11 @@ class DashboardSummaryPage(QWidget):
         layout.addLayout(cards_layout)
         layout.addStretch()
 
-        # Click behavior
         self.cards["unpaid"].clicked.connect(lambda: self.goto("Clients"))
         self.cards["clients"].clicked.connect(lambda: self.goto("Billing"))
         self.cards["trucks"].clicked.connect(lambda: self.goto("Truck Salok"))
         self.cards["today"].clicked.connect(lambda: self.goto("Reports"))
 
-    # ---------------- Create card ----------------
     def make_card(self, title):
         frame = ClickableCard()
         frame.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -201,41 +213,30 @@ class DashboardSummaryPage(QWidget):
         frame.value_label = value
         return frame
 
-    # ---------------- Refresh data ----------------
     def refresh(self):
         conn = get_db_conn()
         cur = conn.cursor()
         today = date.today().strftime("%Y-%m-%d")
 
-        # Unpaid (ACTIVE only)
-        cur.execute("""
-            SELECT COUNT(*) FROM clients
-            WHERE payment_status='Unpaid' AND status='Active'
-        """)
-        unpaid = cur.fetchone()[0]
-
-        # Overdue
         cur.execute("""
             SELECT COUNT(*) FROM clients
             WHERE payment_status='Unpaid'
             AND status='Active'
-            AND date IS NOT NULL
-            AND date < ?
-        """, (today,))
-        overdue = cur.fetchone()[0]
+            AND type IN ('household','apartment')
+        """)
+        unpaid = cur.fetchone()[0]
 
-        # Client receivables
         cur.execute("""
             SELECT SUM(bill) FROM clients
-            WHERE payment_status='Unpaid' AND status='Active'
+            WHERE payment_status='Unpaid'
+            AND status='Active'
+            AND type IN ('household','apartment')
         """)
         client_total = cur.fetchone()[0] or 0
 
-        # Truck receivables
         cur.execute("SELECT SUM(drums * price) FROM truck_saloks")
         truck_total = cur.fetchone()[0] or 0
 
-        # Today collections
         cur.execute("""
             SELECT SUM(amount) FROM payments
             WHERE date = ?
@@ -249,12 +250,6 @@ class DashboardSummaryPage(QWidget):
         self.cards["trucks"].value_label.setText(f"{truck_total:.2f}")
         self.cards["today"].value_label.setText(f"{today_total:.2f}")
 
-        if overdue > 0:
-            self.cards["unpaid"].setStyleSheet(self.card_style("#7a1f1f"))
-        else:
-            self.cards["unpaid"].setStyleSheet(self.card_style("#222"))
-
-    # ---------------- Navigation ----------------
     def goto(self, name):
         pages = {
             "Clients": self.parent_dashboard.page_clients,
