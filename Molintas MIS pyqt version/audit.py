@@ -1,27 +1,28 @@
 # audit.py
 # Central audit logging helper
-# Step 8A: foundation for audit logs
 
+import sqlite3
 from datetime import datetime
-from db import get_db_conn
+from db import DB_PATH
 
 
-def log_action(username, action, note=""):
-    """
-    Writes a single audit log entry to the logs table.
-    """
-    conn = get_db_conn()
-    cur = conn.cursor()
+def log_action(username, action, note=None):
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        cur = conn.cursor()
 
-    cur.execute("""
-        INSERT INTO logs (username, action, note, datetime)
-        VALUES (?, ?, ?, ?)
-    """, (
-        username,
-        action,
-        note,
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    ))
+        cur.execute("""
+            INSERT INTO logs (username, action, note, datetime)
+            VALUES (?, ?, ?, ?)
+        """, (
+            username,
+            action,
+            note,
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ))
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+        conn.close()
+
+    except sqlite3.OperationalError as e:
+        print("AUDIT LOG FAILED:", e)
